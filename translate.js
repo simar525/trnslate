@@ -280,7 +280,7 @@ class AutoTranslator {
 document.addEventListener('DOMContentLoaded', () => {
   // Default endpoint is relative (/api/translate)
   // Can be overridden by setting window.TRANSLATE_API_ENDPOINT
-  const apiEndpoint = window.TRANSLATE_API_ENDPOINT || '/api/translate';
+  const apiEndpoint = 'http://localhost:3000/api/translate';
   
   // Initialize after a short delay to ensure all content is loaded
   setTimeout(() => {
