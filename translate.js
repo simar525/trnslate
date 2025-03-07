@@ -1,263 +1,199 @@
-(function() {
-  const LANGUAGES = {
-    en: { name: 'English', native: 'English' },
-    es: { name: 'Spanish', native: 'EspaÃ±ol' },
-    fr: { name: 'French', native: 'FranÃ§ais' },
-    de: { name: 'German', native: 'Deutsch' },
-    it: { name: 'Italian', native: 'Italiano' },
-    pt: { name: 'Portuguese', native: 'PortuguÃªs' },
-    ru: { name: 'Russian', native: 'Ð ÑƒÑÑÐºÐ¸Ð¹' },
-    zh: { name: 'Chinese', native: 'ä¸­æ–‡' },
-    ja: { name: 'Japanese', native: 'æ—¥æœ¬èªž' },
-    ko: { name: 'Korean', native: 'í•œêµ­ì–´' },
-    ar: { name: 'Arabic', native: 'Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©' }
-  };
+class AutoTranslator {
+  constructor(apiKey, targetSelector = 'body') {
+    this.apiKey = apiKey;
+    this.targetSelector = targetSelector;
+    this.originalContent = {};
+    this.currentLanguage = 'en';
+    this.supportedLanguages = {
+      'en': 'English',
+      'es': 'Spanish',
+      'fr': 'French',
+      'de': 'German',
+      'it': 'Italian',
+      'pt': 'Portuguese',
+      'zh': 'Chinese',
+      'ja': 'Japanese',
+      'ko': 'Korean',
+      'ru': 'Russian',
+      'ar': 'Arabic',
+      'hi': 'Hindi'
+    };
+  }
 
-  class WebsiteTranslator {
-    constructor(websiteId) {
-      this.websiteId = websiteId;
-      this.translations = {};
-      this.currentLanguage = localStorage.getItem('translator_language') || 'en';
-      this.init();
+  init() {
+    this.createLanguageSelector();
+    this.storeOriginalContent();
+    this.addEventListeners();
+  }
+
+  createLanguageSelector() {
+    const selector = document.createElement('div');
+    selector.className = 'language-selector';
+    selector.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      background-color: #fff;
+      border-radius: 5px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      padding: 10px;
+    `;
+
+    let selectHTML = `
+      <select id="language-select">
+        <option value="original">Original</option>
+    `;
+    
+    for (const [code, name] of Object.entries(this.supportedLanguages)) {
+      selectHTML += `<option value="${code}">${name}</option>`;
     }
+    
+    selectHTML += `</select>`;
+    selector.innerHTML = selectHTML;
+    document.body.appendChild(selector);
+  }
 
-    async init() {
+  storeOriginalContent() {
+    const elements = this.getTranslatableElements();
+    elements.forEach((element, index) => {
+      this.originalContent[index] = element.innerText.trim();
+    });
+  }
+
+  getTranslatableElements() {
+    const container = document.querySelector(this.targetSelector);
+    const elements = [];
+    
+    // Select elements that typically contain translatable text
+    const selectors = [
+      'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+      'a', 'button', 'li', 'span', 'div:not(:has(*))',
+      'label', 'td', 'th'
+    ];
+    
+    selectors.forEach(selector => {
+      const selectedElements = container.querySelectorAll(selector);
+      selectedElements.forEach(el => {
+        // Check if the element has text and isn't just whitespace
+        if (el.innerText && el.innerText.trim() !== '' && !elements.includes(el)) {
+          // Skip elements that only contain other translated elements
+          if (el.children.length === 0 || el.innerText !== Array.from(el.children).map(c => c.innerText).join('')) {
+            elements.push(el);
+          }
+        }
+      });
+    });
+    
+    return elements;
+  }
+
+  addEventListeners() {
+    document.getElementById('language-select').addEventListener('change', async (e) => {
+      const langCode = e.target.value;
+      
+      if (langCode === 'original') {
+        this.restoreOriginalContent();
+        return;
+      }
+      
+      if (langCode === this.currentLanguage) return;
+      
+      this.currentLanguage = langCode;
+      await this.translatePage(langCode);
+    });
+  }
+
+  restoreOriginalContent() {
+    const elements = this.getTranslatableElements();
+    elements.forEach((element, index) => {
+      if (this.originalContent[index]) {
+        element.innerText = this.originalContent[index];
+      }
+    });
+    this.currentLanguage = 'en';
+  }
+
+  async translatePage(targetLanguage) {
+    const elements = this.getTranslatableElements();
+    
+    // Group text in batches to minimize API calls
+    const batchSize = 10;
+    const batches = [];
+    
+    for (let i = 0; i < elements.length; i += batchSize) {
+      const batch = elements.slice(i, i + batchSize);
+      batches.push(batch);
+    }
+    
+    for (const batch of batches) {
+      const textsToTranslate = batch.map((el, i) => {
+        const index = elements.indexOf(el);
+        return this.originalContent[index] || el.innerText;
+      });
+      
       try {
-        // In WebContainer environment, we'll use a mock API response
-        this.translations = {
-          es: {
-            'Hello': 'Â¡Hola!',
-            'Welcome': 'Â¡Bienvenido!',
-          },
-          fr: {
-            'Hello': 'Bonjour!',
-            'Welcome': 'Bienvenue!',
-          }
-        };
+        const translatedTexts = await this.translateTexts(textsToTranslate, targetLanguage);
         
-        this.injectStyles();
-        this.setupLanguageSelector();
-        this.translatePage();
-      } catch (error) {
-        console.error('Failed to initialize translator:', error);
-      }
-    }
-
-    injectStyles() {
-      const styles = `
-        .translator-container {
-          position: fixed;
-          bottom: 20px;
-          right: 20px;
-          z-index: 9999;
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
-        .translator-button {
-          background: white;
-          border: 1px solid #e2e8f0;
-          padding: 8px 16px;
-          border-radius: 20px;
-          cursor: pointer;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          font-size: 14px;
-          color: #1a202c;
-          transition: all 0.2s;
-        }
-        .translator-button:hover {
-          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .translator-dropdown {
-          position: absolute;
-          bottom: 100%;
-          right: 0;
-          margin-bottom: 10px;
-          background: white;
-          border-radius: 8px;
-          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-          border: 1px solid #e2e8f0;
-          width: 200px;
-          max-height: 300px;
-          overflow-y: auto;
-        }
-        .translator-search {
-          padding: 8px;
-          border-bottom: 1px solid #e2e8f0;
-        }
-        .translator-search input {
-          width: 100%;
-          padding: 6px 12px;
-          border: 1px solid #e2e8f0;
-          border-radius: 4px;
-          font-size: 14px;
-        }
-        .translator-languages {
-          padding: 4px 0;
-        }
-        .translator-language {
-          padding: 8px 12px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          font-size: 14px;
-        }
-        .translator-language:hover {
-          background: #f7fafc;
-        }
-        .translator-language.active {
-          background: #ebf8ff;
-          color: #2b6cb0;
-        }
-        .translator-language-code {
-          color: #718096;
-          font-size: 12px;
-        }
-      `;
-
-      const styleSheet = document.createElement('style');
-      styleSheet.textContent = styles;
-      document.head.appendChild(styleSheet);
-    }
-
-    setupLanguageSelector() {
-      const container = document.createElement('div');
-      container.className = 'translator-container';
-      
-      const button = document.createElement('button');
-      button.className = 'translator-button';
-      button.innerHTML = `
-        <span>ðŸŒ</span>
-        <span>${LANGUAGES[this.currentLanguage].native}</span>
-      `;
-      
-      const dropdown = document.createElement('div');
-      dropdown.className = 'translator-dropdown';
-      dropdown.style.display = 'none';
-      
-      const searchContainer = document.createElement('div');
-      searchContainer.className = 'translator-search';
-      searchContainer.innerHTML = `
-        <input type="text" placeholder="Search languages..." />
-      `;
-      
-      const languagesList = document.createElement('div');
-      languagesList.className = 'translator-languages';
-      
-      // Populate languages
-      this.updateLanguagesList(languagesList);
-      
-      dropdown.appendChild(searchContainer);
-      dropdown.appendChild(languagesList);
-      
-      // Event listeners
-      button.addEventListener('click', () => {
-        dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
-      });
-      
-      document.addEventListener('click', (e) => {
-        if (!container.contains(e.target)) {
-          dropdown.style.display = 'none';
-        }
-      });
-      
-      const searchInput = searchContainer.querySelector('input');
-      searchInput.addEventListener('input', (e) => {
-        const query = e.target.value.toLowerCase();
-        this.updateLanguagesList(languagesList, query);
-      });
-      
-      container.appendChild(button);
-      container.appendChild(dropdown);
-      document.body.appendChild(container);
-    }
-
-    updateLanguagesList(container, searchQuery = '') {
-      container.innerHTML = '';
-      Object.entries(LANGUAGES)
-        .filter(([code, lang]) => {
-          const searchString = `${lang.name} ${lang.native} ${code}`.toLowerCase();
-          return searchString.includes(searchQuery);
-        })
-        .forEach(([code, lang]) => {
-          const langElement = document.createElement('div');
-          langElement.className = `translator-language ${code === this.currentLanguage ? 'active' : ''}`;
-          langElement.innerHTML = `
-            <span>${lang.native}</span>
-            <span class="translator-language-code">${code.toUpperCase()}</span>
-          `;
-          
-          langElement.addEventListener('click', () => {
-            this.setLanguage(code);
-          });
-          
-          container.appendChild(langElement);
-        });
-    }
-
-    translate(text) {
-      if (this.currentLanguage === 'en') return text;
-      return this.translations[this.currentLanguage]?.[text] || text;
-    }
-
-    setLanguage(lang) {
-      this.currentLanguage = lang;
-      localStorage.setItem('translator_language', lang);
-      this.translatePage();
-      
-      // Update button text
-      const button = document.querySelector('.translator-button');
-      if (button) {
-        button.innerHTML = `
-          <span>ðŸŒ</span>
-          <span>${LANGUAGES[this.currentLanguage].native}</span>
-        `;
-      }
-      
-      // Update active state in dropdown
-      const languages = document.querySelectorAll('.translator-language');
-      languages.forEach(el => {
-        el.classList.toggle('active', el.querySelector('.translator-language-code').textContent.toLowerCase() === lang.toUpperCase());
-      });
-      
-      // Hide dropdown
-      const dropdown = document.querySelector('.translator-dropdown');
-      if (dropdown) {
-        dropdown.style.display = 'none';
-      }
-    }
-
-    translatePage() {
-      const walker = document.createTreeWalker(
-        document.body,
-        NodeFilter.SHOW_TEXT,
-        {
-          acceptNode: (node) => {
-            // Skip script and style contents
-            if (node.parentElement?.tagName === 'SCRIPT' || 
-                node.parentElement?.tagName === 'STYLE') {
-              return NodeFilter.FILTER_REJECT;
-            }
-            return NodeFilter.FILTER_ACCEPT;
+        batch.forEach((element, i) => {
+          if (translatedTexts[i]) {
+            element.innerText = translatedTexts[i];
           }
-        },
-        false
-      );
-
-      let node;
-      while (node = walker.nextNode()) {
-        const text = node.textContent.trim();
-        if (text) {
-          node.textContent = this.translate(text);
-        }
+        });
+      } catch (error) {
+        console.error('Translation error:', error);
       }
     }
   }
 
-  // Initialize the translator
-  const script = document.currentScript;
-  const websiteId = script.dataset.websiteId;
-  window.translator = new WebsiteTranslator(websiteId);
-})();
+  async translateTexts(texts, targetLanguage) {
+    // Create a prompt for GPT-4o
+    const prompt = `Translate the following texts from any language to ${this.supportedLanguages[targetLanguage]}. 
+    Return only the translations, one per line, in the same order as the input, without any additional text:
+    
+    ${texts.join('\n---\n')}`;
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a translation assistant. Only provide the translated text without explanations or additional information.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.3
+        })
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error?.message || 'Translation API error');
+      }
+
+      const translatedContent = data.choices[0].message.content;
+      return translatedContent.split('\n---\n').map(t => t.trim());
+    } catch (error) {
+      console.error('Translation API error:', error);
+      return texts; // Return original texts on error
+    }
+  }
+}
+
+// Usage:
+document.addEventListener('DOMContentLoaded', () => {
+  // Replace 'YOUR_OPENAI_API_KEY' with your actual OpenAI API key
+  const translator = new AutoTranslator('sk-proj-OUmqCzaUiYeq4ZAcRKvaT3BlbkFJf8hSzUTCZq8kxe286woN');
+  translator.init();
+});
