@@ -146,49 +146,34 @@ class AutoTranslator {
     }
   }
 
-  async translateTexts(texts, targetLanguage) {
-    // Create a prompt for GPT-4o
-    const prompt = `Translate the following texts from any language to ${this.supportedLanguages[targetLanguage]}. 
-    Return only the translations, one per line, in the same order as the input, without any additional text:
+ async translateTexts(texts, targetLanguage) {
+  if (texts.length === 0) return [];
+  
+  try {
+    const response = await fetch('/api/translate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        texts,
+        targetLanguage: this.supportedLanguages[targetLanguage]
+      })
+    });
     
-    ${texts.join('\n---\n')}`;
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a translation assistant. Only provide the translated text without explanations or additional information.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.3
-        })
-      });
-
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.error?.message || 'Translation API error');
-      }
-
-      const translatedContent = data.choices[0].message.content;
-      return translatedContent.split('\n---\n').map(t => t.trim());
-    } catch (error) {
-      console.error('Translation API error:', error);
-      return texts; // Return original texts on error
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.details || `Server error: ${response.status}`);
     }
+    
+    const data = await response.json();
+    return data.translatedTexts;
+  } catch (error) {
+    console.error('Translation API error:', error);
+    throw error;
   }
+}
+
 }
 
 // Usage:
