@@ -1,9 +1,17 @@
+/**
+ * Website Auto-Translator
+ * Uses a server-side proxy to securely translate page content
+ * 
+ * Usage: 
+ * <script src="https://your-github-repo.github.io/translate.js"></script>
+ */
 class AutoTranslator {
-  constructor(apiKey, targetSelector = 'body') {
-    this.apiKey = apiKey;
-    this.targetSelector = targetSelector;
+  constructor(apiEndpoint = '/api/translate') {
+    this.apiEndpoint = apiEndpoint;
+    this.targetSelector = 'body';
     this.originalContent = {};
     this.currentLanguage = 'en';
+    this.translationInProgress = false;
     this.supportedLanguages = {
       'en': 'English',
       'es': 'Spanish',
@@ -24,6 +32,7 @@ class AutoTranslator {
     this.createLanguageSelector();
     this.storeOriginalContent();
     this.addEventListeners();
+    console.log("AutoTranslator initialized with", Object.keys(this.originalContent).length, "translatable elements");
   }
 
   createLanguageSelector() {
@@ -38,18 +47,26 @@ class AutoTranslator {
       border-radius: 5px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.2);
       padding: 10px;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
     `;
 
     let selectHTML = `
-      <select id="language-select">
-        <option value="original">Original</option>
+      <div style="display: flex; align-items: center; margin-bottom: 5px;">
+        <span style="margin-right: 8px;">🌐</span>
+        <select id="language-select" style="padding: 5px; border-radius: 3px; border: 1px solid #ccc;">
+          <option value="original">Original</option>
     `;
     
     for (const [code, name] of Object.entries(this.supportedLanguages)) {
       selectHTML += `<option value="${code}">${name}</option>`;
     }
     
-    selectHTML += `</select>`;
+    selectHTML += `</select></div>`;
+    
+    // Add a status indicator
+    selectHTML += `<div id="translation-status" style="font-size: 12px; color: #666; margin-top: 5px;"></div>`;
+    
     selector.innerHTML = selectHTML;
     document.body.appendChild(selector);
   }
@@ -63,45 +80,103 @@ class AutoTranslator {
 
   getTranslatableElements() {
     const container = document.querySelector(this.targetSelector);
+    if (!container) {
+      console.error(`Target selector '${this.targetSelector}' not found`);
+      return [];
+    }
+    
     const elements = [];
     
-    // Select elements that typically contain translatable text
+    // Improved selector for translatable content
     const selectors = [
       'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
-      'a', 'button', 'li', 'span', 'div:not(:has(*))',
+      'a:not([href^="#"])', 'button', 'li', 
       'label', 'td', 'th'
     ];
     
     selectors.forEach(selector => {
       const selectedElements = container.querySelectorAll(selector);
       selectedElements.forEach(el => {
-        // Check if the element has text and isn't just whitespace
-        if (el.innerText && el.innerText.trim() !== '' && !elements.includes(el)) {
-          // Skip elements that only contain other translated elements
-          if (el.children.length === 0 || el.innerText !== Array.from(el.children).map(c => c.innerText).join('')) {
+        // Only include elements with direct text content
+        const hasTextContent = Array.from(el.childNodes).some(node => 
+          node.nodeType === Node.TEXT_NODE && node.textContent.trim().length > 0);
+        
+        if (hasTextContent && !el.closest('.language-selector')) {
+          // Skip elements with no text or already included
+          if (el.innerText.trim() !== '' && !elements.includes(el)) {
             elements.push(el);
           }
         }
       });
     });
     
+    // Add special handling for spans and divs with direct text
+    const textContainers = container.querySelectorAll('span, div');
+    textContainers.forEach(el => {
+      // Check if it has direct text content not coming from child elements
+      let directText = '';
+      for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          directText += node.textContent;
+        }
+      }
+      
+      if (directText.trim() !== '' && !el.closest('.language-selector')) {
+        // Skip elements with no text or already included
+        if (!elements.includes(el)) {
+          elements.push(el);
+        }
+      }
+    });
+    
     return elements;
   }
 
   addEventListeners() {
-    document.getElementById('language-select').addEventListener('change', async (e) => {
+    const selectElement = document.getElementById('language-select');
+    if (!selectElement) {
+      console.error("Language select element not found");
+      return;
+    }
+    
+    selectElement.addEventListener('change', async (e) => {
       const langCode = e.target.value;
       
+      if (this.translationInProgress) {
+        this.updateStatus("Translation already in progress, please wait...");
+        return;
+      }
+      
       if (langCode === 'original') {
+        this.updateStatus("Restoring original content...");
         this.restoreOriginalContent();
+        this.updateStatus("Original content restored");
         return;
       }
       
       if (langCode === this.currentLanguage) return;
       
       this.currentLanguage = langCode;
-      await this.translatePage(langCode);
+      this.translationInProgress = true;
+      
+      try {
+        this.updateStatus(`Translating to ${this.supportedLanguages[langCode]}...`);
+        await this.translatePage(langCode);
+        this.updateStatus(`Page translated to ${this.supportedLanguages[langCode]}`);
+      } catch (error) {
+        console.error("Translation failed:", error);
+        this.updateStatus("Translation failed. Please try again later.");
+      } finally {
+        this.translationInProgress = false;
+      }
     });
+  }
+
+  updateStatus(message) {
+    const statusElement = document.getElementById('translation-status');
+    if (statusElement) {
+      statusElement.textContent = message;
+    }
   }
 
   restoreOriginalContent() {
@@ -111,14 +186,19 @@ class AutoTranslator {
         element.innerText = this.originalContent[index];
       }
     });
+    
     this.currentLanguage = 'en';
   }
 
   async translatePage(targetLanguage) {
     const elements = this.getTranslatableElements();
+    if (elements.length === 0) {
+      console.error("No translatable elements found");
+      return;
+    }
     
-    // Group text in batches to minimize API calls
-    const batchSize = 10;
+    // Group text in smaller batches to avoid token limits
+    const batchSize = 8;
     const batches = [];
     
     for (let i = 0; i < elements.length; i += batchSize) {
@@ -126,59 +206,85 @@ class AutoTranslator {
       batches.push(batch);
     }
     
+    let completedBatches = 0;
     for (const batch of batches) {
-      const textsToTranslate = batch.map((el, i) => {
+      const textsToTranslate = batch.map(el => {
         const index = elements.indexOf(el);
-        return this.originalContent[index] || el.innerText;
-      });
+        return this.originalContent[index] || el.innerText.trim();
+      }).filter(text => text.length > 0);
+      
+      if (textsToTranslate.length === 0) continue;
       
       try {
         const translatedTexts = await this.translateTexts(textsToTranslate, targetLanguage);
         
-        batch.forEach((element, i) => {
-          if (translatedTexts[i]) {
-            element.innerText = translatedTexts[i];
+        let translationIndex = 0;
+        batch.forEach((element) => {
+          const elementText = element.innerText.trim();
+          if (elementText && elementText.length > 0) {
+            if (translatedTexts[translationIndex]) {
+              element.innerText = translatedTexts[translationIndex];
+              translationIndex++;
+            }
           }
         });
+        
+        completedBatches++;
+        this.updateStatus(`Translating... ${Math.round((completedBatches / batches.length) * 100)}%`);
       } catch (error) {
         console.error('Translation error:', error);
+        throw error;
+      }
+      
+      // Add a small delay between batches
+      if (batches.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
     }
   }
 
- async translateTexts(texts, targetLanguage) {
-  if (texts.length === 0) return [];
-  
-  try {
-    const response = await fetch('/api/translate', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        texts,
-        targetLanguage: this.supportedLanguages[targetLanguage]
-      })
-    });
+  async translateTexts(texts, targetLanguage) {
+    if (texts.length === 0) return [];
     
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.details || `Server error: ${response.status}`);
+    try {
+      const response = await fetch(this.apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          texts,
+          targetLanguage
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (!data.translatedTexts) {
+        throw new Error("Invalid server response");
+      }
+      
+      return data.translatedTexts;
+    } catch (error) {
+      console.error('Translation API error:', error);
+      throw error;
     }
-    
-    const data = await response.json();
-    return data.translatedTexts;
-  } catch (error) {
-    console.error('Translation API error:', error);
-    throw error;
   }
 }
 
-}
-
-// Usage:
+// Initialize the translator
 document.addEventListener('DOMContentLoaded', () => {
-  // Replace 'YOUR_OPENAI_API_KEY' with your actual OpenAI API key
-  const translator = new AutoTranslator('sk-proj-OUmqCzaUiYeq4ZAcRKvaT3BlbkFJf8hSzUTCZq8kxe286woN');
-  translator.init();
+  // Default endpoint is relative (/api/translate)
+  // Can be overridden by setting window.TRANSLATE_API_ENDPOINT
+  const apiEndpoint = window.TRANSLATE_API_ENDPOINT || '/api/translate';
+  
+  // Initialize after a short delay to ensure all content is loaded
+  setTimeout(() => {
+    const translator = new AutoTranslator(apiEndpoint);
+    translator.init();
+  }, 1000);
 });
